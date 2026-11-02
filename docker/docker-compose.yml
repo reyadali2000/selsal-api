@@ -1,0 +1,32 @@
+﻿version: '3.8'
+
+services:
+  wadialain-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: wadialain_api_container
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=WadiAlAin_QualityDB;User Id=sa;Password=YourStrong@Password2026;TrustServerCertificate=True;
+    depends_on:
+      - sqlserver
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: wadialain_sql_container
+    restart: always
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=YourStrong@Password2026
+      - MSSQL_PID=Express
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+
+volumes:
+  mssql_data:
