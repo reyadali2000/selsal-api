@@ -228,7 +228,7 @@ SET IDENTITY_INSERT dbo.[TestParameters] OFF;
 GO
 
 -- -------------------------------------------------------------
--- إدراج بيانات الجدول: dbo.[QualityStandards] (217 صف)
+-- إدراج بيانات الجدول: dbo.[QualityStandards] (216 صف)
 -- -------------------------------------------------------------
 SET IDENTITY_INSERT dbo.[QualityStandards] ON;
 GO
@@ -407,7 +407,6 @@ VALUES
   (161, NULL, N'Raw Water', 2, 100.0, 1000.0, NULL),
   (162, NULL, N'Raw Water', 3, NULL, 1500.0, NULL),
   (163, NULL, N'Raw Water', 4, NULL, NULL, NULL),
-  (164, NULL, N'Raw Water', 5, NULL, NULL, NULL),
   (165, NULL, N'Raw Water', 6, NULL, 500.0, NULL),
   (166, NULL, N'Raw Water', 7, NULL, 200.0, NULL),
   (167, NULL, N'Raw Water', 8, NULL, 350.0, NULL),
