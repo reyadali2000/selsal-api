@@ -418,7 +418,7 @@ namespace WadiAlAin.Infrastructure.Services
                 };
 
                 string approvalType = ((string?)record.approval_type)?.Trim().ToLowerInvariant() ?? "two_level";
-                bool isSingleLevel = approvalType == "single_level" || approvalType == "none";
+                bool isSingleLevel = approvalType == "single_level" || approvalType == "three_level_qm" || approvalType == "none";
 
                 string requestedAppStatus = body.TryGetProperty("approval_status", out var reqSt) ? (reqSt.GetString() ?? "") : "";
                 string currentAppStatus = (string?)record.approval_status ?? currentStatus;
