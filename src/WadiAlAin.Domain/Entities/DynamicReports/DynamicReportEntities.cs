@@ -68,6 +68,7 @@ namespace WadiAlAin.Domain.Entities
         public string? RejectionReason { get; set; }
         public string? RejectedBy { get; set; }
         public string? RejectedAt { get; set; }
+        public string? ClientUuid { get; set; }
     }
 
     public class ReportValue : Entity

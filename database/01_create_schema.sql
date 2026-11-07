@@ -234,6 +234,7 @@ BEGIN
         gm_approved_by NVARCHAR(200) NULL,
         gm_approved_at NVARCHAR(50) NULL,
         rejected_by NVARCHAR(200) NULL,
+        rejected_at NVARCHAR(100) NULL,
         product_name NVARCHAR(200) NULL,
         bottle_size NVARCHAR(100) NULL,
         production_date NVARCHAR(50) NULL,
@@ -265,7 +266,8 @@ BEGIN
         gm_decision NVARCHAR(100) NULL,
         gm_decision_by NVARCHAR(200) NULL,
         gm_decision_at NVARCHAR(50) NULL,
-        gm_decision_notes NVARCHAR(MAX) NULL
+        gm_decision_notes NVARCHAR(MAX) NULL,
+        rejection_count INT NOT NULL DEFAULT 0
     );
     CREATE INDEX idx_water_logs_branch_date ON dbo.WaterQualityLogs(branch_id, created_at);
     PRINT 'Created table: dbo.WaterQualityLogs';
@@ -391,6 +393,7 @@ BEGIN
         approval_status NVARCHAR(50) NOT NULL DEFAULT 'Pending_QM',
         rejection_reason NVARCHAR(MAX) NULL,
         rejected_by NVARCHAR(200) NULL,
+        rejected_at NVARCHAR(100) NULL,
         qm_approved_by NVARCHAR(200) NULL,
         qm_approved_at NVARCHAR(50) NULL,
         gm_approved_by NVARCHAR(200) NULL,
@@ -410,7 +413,8 @@ BEGIN
         gm_decision NVARCHAR(100) NULL,
         gm_decision_by NVARCHAR(200) NULL,
         gm_decision_at NVARCHAR(50) NULL,
-        gm_decision_notes NVARCHAR(MAX) NULL
+        gm_decision_notes NVARCHAR(MAX) NULL,
+        rejection_count INT NOT NULL DEFAULT 0
     );
     PRINT 'Created table: dbo.HygieneReports';
 END
@@ -488,6 +492,7 @@ BEGIN
         lab_responsible_name NVARCHAR(200) NULL,
         lab_responsible_at NVARCHAR(50) NULL,
         rejected_by NVARCHAR(200) NULL,
+        rejected_at NVARCHAR(100) NULL,
         rejection_reason NVARCHAR(MAX) NULL,
         rejection_category NVARCHAR(100) NULL,
         severity_level NVARCHAR(100) NULL,
@@ -504,7 +509,8 @@ BEGIN
         accepted_quantity NVARCHAR(100) NULL,
         rejected_quantity NVARCHAR(100) NULL,
         branch_id INT NULL,
-        branch_name NVARCHAR(200) NULL
+        branch_name NVARCHAR(200) NULL,
+        rejection_count INT NOT NULL DEFAULT 0
     );
     PRINT 'Created table: dbo.RawMaterialReports';
 END
@@ -700,9 +706,13 @@ BEGIN
         gm_decision NVARCHAR(100) NULL,
         gm_decision_by NVARCHAR(200) NULL,
         gm_decision_at NVARCHAR(50) NULL,
-        gm_decision_notes NVARCHAR(MAX) NULL
+        gm_decision_notes NVARCHAR(MAX) NULL,
+        client_uuid NVARCHAR(64) NULL,
+        is_compliant BIT NULL DEFAULT 1,
+        rejection_count INT NOT NULL DEFAULT 0
     );
     CREATE INDEX idx_dr_records_report ON dbo.dr_records(report_id, created_at);
+    CREATE UNIQUE INDEX IX_dr_records_client_uuid ON dbo.dr_records(client_uuid) WHERE client_uuid IS NOT NULL;
     PRINT 'Created table: dbo.dr_records';
 END
 GO

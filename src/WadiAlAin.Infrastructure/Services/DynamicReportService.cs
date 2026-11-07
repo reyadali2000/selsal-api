@@ -111,11 +111,11 @@ namespace WadiAlAin.Infrastructure.Services
                     SUM(CASE WHEN approval_status = 'Pending_QS' THEN 1 ELSE 0 END) AS PendingQS,
                     SUM(CASE WHEN approval_status = 'Pending_QM' THEN 1 ELSE 0 END) AS PendingQM,
                     SUM(CASE WHEN approval_status = 'Pending_GM' THEN 1 ELSE 0 END) AS PendingGM,
-                    SUM(CASE WHEN approval_status IN ('Rejected', 'Rejected_By_GM') THEN 1 ELSE 0 END) AS RejectedRecords,
+                    SUM(CASE WHEN approval_status IN ('Rejected', 'Rejected_By_GM', 'Rejected_Final') THEN 1 ELSE 0 END) AS RejectedRecords,
                     SUM(CASE WHEN approval_status = 'Corrective_In_Progress' THEN 1 ELSE 0 END) AS CorrectiveInProgress,
                     SUM(CASE WHEN approval_status = 'Pending_QM_Decision' THEN 1 ELSE 0 END) AS PendingQMDecision,
                     SUM(CASE WHEN approval_status = 'Pending_GM_Decision' THEN 1 ELSE 0 END) AS PendingGMDecision,
-                    SUM(CASE WHEN COALESCE(is_compliant, 1) = 1 AND approval_status NOT IN ('Rejected', 'Rejected_By_GM', 'Corrective_In_Progress') THEN 1 ELSE 0 END) AS CompliantRecords
+                    SUM(CASE WHEN COALESCE(is_compliant, 1) = 1 AND approval_status NOT IN ('Rejected', 'Rejected_By_GM', 'Rejected_Final', 'Corrective_In_Progress') THEN 1 ELSE 0 END) AS CompliantRecords
                 FROM dr_records
                 {whereSql}";
 
@@ -193,6 +193,7 @@ namespace WadiAlAin.Infrastructure.Services
                 string? dataJson = body.GetStringOrNull("data_json", "dataJson");
                 string? title = body.GetStringOrNull("title");
                 string? notes = body.GetStringOrNull("notes");
+                string? clientUuid = body.GetStringOrNull("client_uuid", "clientUuid");
                 int isCompliant = (body.GetBoolOrNull("is_compliant", "isCompliant") ?? (body.GetIntOrNull("is_compliant", "isCompliant") != 0)) ? 1 : 0;
                 string createdAt = body.GetString("created_at", "createdAt", null, DateTime.UtcNow.ToString("o"));
                 string status = body.GetString("status", null, null, "Draft");
@@ -216,6 +217,19 @@ namespace WadiAlAin.Infrastructure.Services
                 bool existsInDb = recordId > 0 &&
                     (await conn.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM dr_records WHERE id = @recordId", new { recordId }, trans)) > 0;
 
+                // منع التكرار (Idempotency): إذا تم إرسال client_uuid وكان موجوداً مسبقاً، نقوم بتحديث نفس السجل بدلاً من إنشاء مكرر
+                if (!existsInDb && !string.IsNullOrWhiteSpace(clientUuid))
+                {
+                    var existingIdByUuid = await conn.QuerySingleOrDefaultAsync<int?>(
+                        "SELECT id FROM dr_records WHERE client_uuid = @clientUuid",
+                        new { clientUuid }, trans);
+                    if (existingIdByUuid.HasValue && existingIdByUuid.Value > 0)
+                    {
+                        recordId = existingIdByUuid.Value;
+                        existsInDb = true;
+                    }
+                }
+
                 if (existsInDb)
                 {
                     await conn.ExecuteAsync(@"
@@ -229,13 +243,14 @@ namespace WadiAlAin.Infrastructure.Services
                             data_json = COALESCE(@dataJson, data_json),
                             title = COALESCE(@title, title),
                             notes = COALESCE(@notes, notes),
+                            client_uuid = COALESCE(client_uuid, @clientUuid),
                             is_compliant = @isCompliant,
                             status = @status,
                             approval_status = @approvalStatus,
                             created_by = CASE WHEN created_by = @username OR created_by IS NULL THEN @creatorName ELSE created_by END,
                             updated_at = @now
                         WHERE id = @recordId",
-                        new { recordId, reportId, branchId, branchName, shiftId, shiftName, reportVersionId, dataJson, title, notes, isCompliant, status, approvalStatus, username, creatorName, now = DateTime.UtcNow.ToString("o") }, trans);
+                        new { recordId, reportId, branchId, branchName, shiftId, shiftName, reportVersionId, dataJson, title, notes, clientUuid, isCompliant, status, approvalStatus, username, creatorName, now = DateTime.UtcNow.ToString("o") }, trans);
 
                     await conn.ExecuteAsync("DELETE FROM dr_values WHERE record_id = @recordId", new { recordId }, trans);
                 }
@@ -244,14 +259,14 @@ namespace WadiAlAin.Infrastructure.Services
                     recordId = await conn.QuerySingleAsync<int>(@"
                         INSERT INTO dr_records (
                             report_id, branch_id, branch_name, shift_id, shift_name,
-                            report_version_id, data_json, title, notes, is_compliant,
+                            report_version_id, data_json, title, notes, client_uuid, is_compliant,
                             created_by, created_at, status, approval_status)
                         VALUES (
                             @reportId, @branchId, @branchName, @shiftId, @shiftName,
-                            @reportVersionId, @dataJson, @title, @notes, @isCompliant,
+                            @reportVersionId, @dataJson, @title, @notes, @clientUuid, @isCompliant,
                             @createdBy, @createdAt, @status, @approvalStatus);
                         SELECT CAST(SCOPE_IDENTITY() AS INT);",
-                        new { reportId, branchId, branchName, shiftId, shiftName, reportVersionId, dataJson, title, notes, isCompliant, createdBy = creatorName, createdAt, status, approvalStatus }, trans);
+                        new { reportId, branchId, branchName, shiftId, shiftName, reportVersionId, dataJson, title, notes, clientUuid, isCompliant, createdBy = creatorName, createdAt, status, approvalStatus }, trans);
                 }
 
                 if (body.TryGetProperty("values", out var valArr) && valArr.ValueKind == JsonValueKind.Array)
@@ -348,7 +363,7 @@ namespace WadiAlAin.Infrastructure.Services
                 FROM dr_records r
                 INNER JOIN dr_reports rep ON r.report_id = rep.id
                 LEFT JOIN Users u ON r.created_by = u.username
-                WHERE r.approval_status IN ('Rejected', 'Corrective_In_Progress', 'Pending_QM_Decision', 'Pending_GM_Decision', 'Rejected_By_GM')";
+                WHERE r.approval_status IN ('Rejected', 'Corrective_In_Progress', 'Pending_QM_Decision', 'Pending_GM_Decision', 'Rejected_By_GM', 'Rejected_Final')";
 
             if (branchId.HasValue && branchId.Value > 0)
             {
@@ -420,7 +435,7 @@ namespace WadiAlAin.Infrastructure.Services
                 };
 
                 bool isSpecialistSubmittingCorrective =
-                    (currentAppStatus == "Rejected" || currentAppStatus == "Corrective_In_Progress" || currentAppStatus == "Rejected_By_GM")
+                    (currentAppStatus == "Rejected" || currentAppStatus == "Corrective_In_Progress" || currentAppStatus == "Rejected_By_GM" || currentAppStatus == "Rejected_Final")
                     && (requestedAppStatus == "Pending_QM_Decision" || requestedAppStatus == "Pending_GM_Decision" || requestedAppStatus == "Corrective_In_Progress")
                     && action != "Rejected";
 
@@ -452,15 +467,23 @@ namespace WadiAlAin.Infrastructure.Services
                 string previousStatus = currentAppStatus;
                 string newStatus;
 
-                if (action == "Rejected" || requestedAppStatus == "Rejected_By_GM" || requestedAppStatus == "Rejected")
+                if (action == "Rejected" || requestedAppStatus == "Rejected_By_GM" || requestedAppStatus == "Rejected_Final" || requestedAppStatus == "Rejected")
                 {
                     if (requestedAppStatus == "Corrective_In_Progress")
                     {
                         newStatus = "Corrective_In_Progress";
                     }
-                    else if (currentAppStatus == "Pending_GM_Decision" || requestedAppStatus == "Rejected_By_GM" || (isSingleLevel && currentAppStatus == "Pending_QM_Decision"))
+                    else if (requestedAppStatus == "Rejected_Final")
+                    {
+                        newStatus = "Rejected_Final";
+                    }
+                    else if (currentAppStatus == "Pending_GM_Decision" || requestedAppStatus == "Rejected_By_GM")
                     {
                         newStatus = "Rejected_By_GM";
+                    }
+                    else if (isSingleLevel && currentAppStatus == "Pending_QM_Decision")
+                    {
+                        newStatus = "Rejected_Final";
                     }
                     else
                     {
@@ -574,21 +597,24 @@ namespace WadiAlAin.Infrastructure.Services
                 bool isFinalDecisionStage = currentAppStatus == "Pending_GM_Decision"
                     || (isSingleLevel && currentAppStatus == "Pending_QM_Decision")
                     || newStatus == "Closed"
-                    || newStatus == "Rejected_By_GM";
+                    || newStatus == "Rejected_By_GM"
+                    || newStatus == "Rejected_Final";
 
                 string? gmDecision = body.GetStringOrNull("gm_decision", "gmDecision")
-                    ?? (isFinalDecisionStage ? (newStatus == "Rejected_By_GM" ? "Rejected" : "Approved") : null);
+                    ?? (isFinalDecisionStage ? (newStatus == "Rejected_By_GM" || newStatus == "Rejected_Final" ? "Rejected" : "Approved") : null);
                 string? gmDecisionBy = body.GetStringOrNull("gm_decision_by", "gmDecisionBy")
                     ?? (isFinalDecisionStage ? $"{actorName} ({actorPosition})" : null);
                 string? gmDecisionAt = body.GetStringOrNull("gm_decision_at", "gmDecisionAt")
                     ?? (isFinalDecisionStage ? nowIso : null);
                 string? gmDecisionNotes = body.GetStringOrNull("gm_decision_notes", "gmDecisionNotes")
                     ?? (isFinalDecisionStage ? comments : null);
+                int? rejectionCount = body.GetIntOrNull("rejection_count", "rejectionCount");
 
                 await conn.ExecuteAsync(@"
                     UPDATE dr_records SET
                         status = @newStatus,
                         approval_status = @newStatus,
+                        rejection_count = COALESCE(@rejectionCount, rejection_count),
                         corrective_action = COALESCE(@correctiveAction, corrective_action),
                         corrective_owner = COALESCE(@correctiveOwner, corrective_owner),
                         corrective_due_date = COALESCE(@correctiveDueDate, corrective_due_date),
@@ -636,6 +662,7 @@ namespace WadiAlAin.Infrastructure.Services
                         qmApprovedAt,
                         gmApprovedBy,
                         gmApprovedAt,
+                        rejectionCount,
                         actedAt = nowIso
                     }, trans);
 
@@ -948,6 +975,7 @@ namespace WadiAlAin.Infrastructure.Services
                                 bool isRequired = fld.GetBool("is_required", "isRequired", false);
                                 string? defaultValue = fld.GetStringOrNull("default_value", "defaultValue");
                                 string? optionsJson = fld.GetStringOrNull("options_json", "optionsJson");
+                                string? validationJson = fld.GetStringOrNull("validation_json", "validationJson");
                                 decimal? minValue = fld.GetDecimalOrNull("min_value", "minValue");
                                 decimal? maxValue = fld.GetDecimalOrNull("max_value", "maxValue");
                                 string? unit = fld.GetStringOrNull("unit");
@@ -970,6 +998,7 @@ namespace WadiAlAin.Infrastructure.Services
                                             sort_order = @fldSort,
                                             default_value = @defaultValue,
                                             options_json = @optionsJson,
+                                            validation_json = @validationJson,
                                             min_value = @minValue,
                                             max_value = @maxValue,
                                             unit = @unit,
@@ -978,7 +1007,7 @@ namespace WadiAlAin.Infrastructure.Services
                                             standard_id = @standardId,
                                             updated_at = @now
                                         WHERE id = @fieldId AND report_id = @reportId",
-                                        new { fieldId, reportId, sectionId, fieldKey, label, hint, fieldType, isRequired, fldSort, defaultValue, optionsJson, minValue, maxValue, unit, isVisible, parameterId, standardId, now }, trans);
+                                        new { fieldId, reportId, sectionId, fieldKey, label, hint, fieldType, isRequired, fldSort, defaultValue, optionsJson, validationJson, minValue, maxValue, unit, isVisible, parameterId, standardId, now }, trans);
                                 }
                                 else
                                 {
@@ -986,16 +1015,18 @@ namespace WadiAlAin.Infrastructure.Services
                                         INSERT INTO dr_fields (
                                             report_id, section_id, field_key, label, hint, field_type,
                                             is_required, sort_order, default_value, options_json,
+                                            validation_json,
                                             min_value, max_value, unit, is_visible, parameter_id, standard_id,
                                             created_at, updated_at
                                         ) VALUES (
                                             @reportId, @sectionId, @fieldKey, @label, @hint, @fieldType,
                                             @isRequired, @fldSort, @defaultValue, @optionsJson,
+                                            @validationJson,
                                             @minValue, @maxValue, @unit, @isVisible, @parameterId, @standardId,
                                             @now, @now
                                         );
                                         SELECT CAST(SCOPE_IDENTITY() AS INT);",
-                                        new { reportId, sectionId, fieldKey, label, hint, fieldType, isRequired, fldSort, defaultValue, optionsJson, minValue, maxValue, unit, isVisible, parameterId, standardId, now }, trans);
+                                        new { reportId, sectionId, fieldKey, label, hint, fieldType, isRequired, fldSort, defaultValue, optionsJson, validationJson, minValue, maxValue, unit, isVisible, parameterId, standardId, now }, trans);
                                 }
 
                                 processedFieldIds.Add(fieldId);

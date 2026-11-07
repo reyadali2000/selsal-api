@@ -276,6 +276,13 @@ namespace WadiAlAin.Infrastructure.Services
                 // رفض الإجراء التصحيحي من قبل مدير المصنع
                 sql += ", gm_decision = COALESCE(@GmDecision, 'Rejected'), gm_decision_by = COALESCE(@GmDecisionBy, @ApprovedBy), gm_decision_at = @Now, gm_decision_notes = COALESCE(@GmDecisionNotes, @RejectionReason)";
             }
+            else if (status == "Rejected_Final")
+            {
+                // الرفض النهائي القاطع
+                sql += ", gm_decision = COALESCE(@GmDecision, 'Rejected'), gm_decision_by = COALESCE(@GmDecisionBy, @ApprovedBy), gm_decision_at = @Now, gm_decision_notes = COALESCE(@GmDecisionNotes, @RejectionReason)";
+                if (!string.IsNullOrEmpty(rejectionReason)) sql += ", rejection_reason = COALESCE(rejection_reason, @RejectionReason)";
+                if (!string.IsNullOrEmpty(approvedBy)) sql += ", rejected_by = COALESCE(rejected_by, @ApprovedBy), rejected_at = COALESCE(rejected_at, @Now)";
+            }
             else if (status == "Pending_GM_Decision")
             {
                 // اعتماد الإجراء التصحيحي من مدير الجودة وتحويله لقرار مدير المصنع
@@ -305,10 +312,12 @@ namespace WadiAlAin.Infrastructure.Services
             if (!string.IsNullOrEmpty(dto.CorrectiveOwner)) sql += ", corrective_owner = @CorrectiveOwner";
             if (!string.IsNullOrEmpty(dto.CorrectiveDueDate)) sql += ", corrective_due_date = @CorrectiveDueDate";
 
-            if (!string.IsNullOrEmpty(dto.GmDecision) && status != "Closed" && status != "Rejected_By_GM")
+            if (!string.IsNullOrEmpty(dto.GmDecision) && status != "Closed" && status != "Rejected_By_GM" && status != "Rejected_Final")
             {
                 sql += ", gm_decision = @GmDecision, gm_decision_by = @GmDecisionBy, gm_decision_at = @Now, gm_decision_notes = @GmDecisionNotes";
             }
+
+            if (dto.RejectionCount.HasValue) sql += ", rejection_count = @RejectionCount";
 
             sql += " WHERE id = @Id";
 
@@ -317,6 +326,7 @@ namespace WadiAlAin.Infrastructure.Services
                 Status = status,
                 ApprovedBy = approvedBy,
                 RejectionReason = rejectionReason,
+                RejectionCount = dto.RejectionCount,
                 RejectionCategory = dto.RejectionCategory,
                 SeverityLevel = dto.SeverityLevel,
                 RejectionNotes = dto.RejectionNotes,

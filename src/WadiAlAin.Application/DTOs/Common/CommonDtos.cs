@@ -16,5 +16,6 @@ namespace WadiAlAin.Application.DTOs.Common
         public string? GmDecision { get; set; }
         public string? GmDecisionBy { get; set; }
         public string? GmDecisionNotes { get; set; }
+        public int? RejectionCount { get; set; }
     }
 }

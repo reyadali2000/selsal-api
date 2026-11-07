@@ -281,6 +281,9 @@ namespace WadiAlAin.Infrastructure.Services
             string? microRejectionReason = body.TryGetProperty("microRejectionReason", out var mrrProp) ? mrrProp.GetString() : rejectionReason;
             string? microRejectedBy = body.TryGetProperty("microRejectedBy", out var mrbProp) ? mrbProp.GetString() : approvedBy;
             string? microRejectionAction = body.TryGetProperty("microRejectionAction", out var mraProp) ? mraProp.GetString() : null;
+            int? rejectionCount = body.TryGetProperty("rejectionCount", out var rCountProp) && rCountProp.TryGetInt32(out var rci)
+                ? rci
+                : (body.TryGetProperty("rejection_count", out var rCountProp2) && rCountProp2.TryGetInt32(out var rci2) ? rci2 : (int?)null);
 
             string finalStatus = status;
             if (!string.IsNullOrEmpty(gmDecision))
@@ -330,7 +333,7 @@ namespace WadiAlAin.Infrastructure.Services
             {
                 // رفع الإجراء التصحيحي من أخصائي الجودة لمراجعة مدير الجودة
             }
-            else if (finalStatus == "Rejected" || finalStatus == "Corrective_In_Progress" || finalStatus == "Rejected_By_GM" || finalStatus == "Returned")
+            else if (finalStatus == "Rejected" || finalStatus == "Corrective_In_Progress" || finalStatus == "Rejected_By_GM" || finalStatus == "Rejected_Final" || finalStatus == "Returned")
             {
                 if (!string.IsNullOrEmpty(rejectionReason)) sql += ", rejection_reason = @RejectionReason";
                 if (!string.IsNullOrEmpty(approvedBy) && (finalStatus == "Rejected" || finalStatus == "Returned" || !string.IsNullOrEmpty(rejectionReason)))
@@ -352,6 +355,7 @@ namespace WadiAlAin.Infrastructure.Services
                 sql += ", gm_decision = @GmDecision, gm_decision_by = @GmDecisionBy, gm_decision_at = @Now";
                 if (!string.IsNullOrEmpty(gmDecisionNotes)) sql += ", gm_decision_notes = @GmDecisionNotes";
             }
+            if (rejectionCount.HasValue) sql += ", rejection_count = @RejectionCount";
 
             sql += " WHERE id = @Id";
 
@@ -360,6 +364,7 @@ namespace WadiAlAin.Infrastructure.Services
                 Status = finalStatus,
                 ApprovedBy = approvedBy,
                 RejectionReason = rejectionReason,
+                RejectionCount = rejectionCount,
                 RejectionCategory = rejectionCategory,
                 SeverityLevel = severityLevel,
                 RejectionNotes = rejectionNotes,
