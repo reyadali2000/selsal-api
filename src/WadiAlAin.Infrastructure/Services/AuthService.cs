@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Dapper;
 using WadiAlAin.Application.Common.Interfaces;
@@ -227,8 +228,16 @@ namespace WadiAlAin.Infrastructure.Services
         public async Task<Result<UserSignatureDto?>> GetSignatureAsync(int userId)
         {
             using var conn = _db.CreateConnection();
-            var sig = await conn.QuerySingleOrDefaultAsync<UserSignatureDto>(
-                "SELECT user_id AS UserId, signature_type AS SignatureType, signature_data AS SignatureData, signature_hash AS SignatureHash, is_active AS IsActive FROM user_signatures WHERE user_id = @UserId AND is_active = 1",
+            var sig = await conn.QueryFirstOrDefaultAsync<UserSignatureDto>(@"
+                SELECT TOP 1 
+                    user_id AS UserId, 
+                    signature_type AS SignatureType, 
+                    signature_data AS SignatureData, 
+                    signature_hash AS SignatureHash, 
+                    is_active AS IsActive 
+                FROM user_signatures 
+                WHERE user_id = @UserId AND is_active = 1 
+                ORDER BY id DESC",
                 new { UserId = userId });
 
             return Result<UserSignatureDto?>.Ok(sig);
@@ -240,29 +249,53 @@ namespace WadiAlAin.Infrastructure.Services
             if (targetUserId <= 0)
                 return Result<bool>.Fail("معرف المستخدم غير صالح.");
 
+            if (dto == null || string.IsNullOrWhiteSpace(dto.SignatureData))
+                return Result<bool>.Fail("بيانات التوقيع فارغة.");
+
+            string cleanBase64 = dto.SignatureData.Contains(",")
+                ? dto.SignatureData.Split(',').Last().Trim()
+                : dto.SignatureData.Trim();
+
+            if (cleanBase64.Length > 2_800_000)
+                return Result<bool>.Fail("حجم صورة التوقيع كبير جداً؛ يرجى اختيار صورة بحجم أصغر.");
+
+            byte[] decodedBytes;
+            try
+            {
+                decodedBytes = Convert.FromBase64String(cleanBase64);
+            }
+            catch
+            {
+                return Result<bool>.Fail("صيغة بيانات التوقيع غير صالحة.");
+            }
+
+            string computedHash = Convert.ToHexString(SHA256.HashData(decodedBytes)).ToLowerInvariant();
+            string effectiveType = string.IsNullOrWhiteSpace(dto.SignatureType) ? "drawn_png" : dto.SignatureType.Trim();
+
             using var conn = _db.CreateConnection();
             await conn.ExecuteAsync(@"
+                UPDATE user_signatures SET is_active = 0, updated_at = @Now WHERE user_id = @UserId;
                 IF EXISTS (SELECT 1 FROM user_signatures WHERE user_id = @UserId)
                 BEGIN
-                    UPDATE user_signatures 
+                    UPDATE TOP (1) user_signatures 
                     SET signature_data = @SignatureData, 
                         signature_type = @SignatureType, 
                         signature_hash = @SignatureHash, 
                         is_active = 1, 
                         updated_at = @Now
-                    WHERE user_id = @UserId
+                    WHERE id = (SELECT TOP 1 id FROM user_signatures WHERE user_id = @UserId ORDER BY id DESC)
                 END
                 ELSE
                 BEGIN
-                    INSERT INTO user_signatures (user_id, signature_type, signature_data, signature_hash, is_active, created_at)
-                    VALUES (@UserId, @SignatureType, @SignatureData, @SignatureHash, 1, @Now)
+                    INSERT INTO user_signatures (user_id, signature_type, signature_data, signature_hash, is_active, created_at, updated_at)
+                    VALUES (@UserId, @SignatureType, @SignatureData, @SignatureHash, 1, @Now, @Now)
                 END",
                 new
                 {
                     UserId = targetUserId,
-                    dto.SignatureType,
-                    dto.SignatureData,
-                    dto.SignatureHash,
+                    SignatureType = effectiveType,
+                    SignatureData = cleanBase64,
+                    SignatureHash = computedHash,
                     Now = DateTime.UtcNow.ToString("o")
                 });
 

@@ -864,6 +864,7 @@ namespace WadiAlAin.Infrastructure.Services
             try
             {
                 int reportId = body.GetInt("id", null, 0);
+                bool isNewReport = reportId <= 0;
                 int? rawCatId = body.GetIntOrNull("category_id", "categoryId");
                 int? categoryId = (rawCatId.HasValue && rawCatId.Value > 0) ? rawCatId : null;
                 string name = body.GetString("name", null, null, "تقرير جديد");
@@ -922,8 +923,13 @@ namespace WadiAlAin.Infrastructure.Services
                 {
                     var existingSectionIds = (await conn.QueryAsync<int>(
                         "SELECT id FROM dr_sections WHERE report_id = @reportId", new { reportId }, trans)).ToHashSet();
-                    var existingFieldIds = (await conn.QueryAsync<int>(
-                        "SELECT id FROM dr_fields WHERE report_id = @reportId", new { reportId }, trans)).ToHashSet();
+                    var existingFields = (await conn.QueryAsync<(int Id, string? FieldKey)>(
+                        "SELECT id AS Id, field_key AS FieldKey FROM dr_fields WHERE report_id = @reportId", new { reportId }, trans)).ToList();
+                    var existingFieldIds = existingFields.Select(f => f.Id).ToHashSet();
+                    var existingFieldByKey = existingFields
+                        .Where(f => !string.IsNullOrWhiteSpace(f.FieldKey))
+                        .GroupBy(f => f.FieldKey!, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
 
                     var processedSectionIds = new HashSet<int>();
                     var processedFieldIds = new HashSet<int>();
@@ -983,10 +989,22 @@ namespace WadiAlAin.Infrastructure.Services
                                 int? parameterId = fld.GetIntOrNull("parameter_id", "parameterId");
                                 int? standardId = fld.GetIntOrNull("standard_id", "standardId");
 
-                                int fieldId;
+                                int matchedFieldId = 0;
                                 if (rawFldId > 0 && existingFieldIds.Contains(rawFldId))
                                 {
-                                    fieldId = rawFldId;
+                                    matchedFieldId = rawFldId;
+                                }
+                                else if (!string.IsNullOrWhiteSpace(fieldKey) &&
+                                         existingFieldByKey.TryGetValue(fieldKey, out int byKeyId) &&
+                                         !processedFieldIds.Contains(byKeyId))
+                                {
+                                    matchedFieldId = byKeyId;
+                                }
+
+                                int fieldId;
+                                if (matchedFieldId > 0)
+                                {
+                                    fieldId = matchedFieldId;
                                     await conn.ExecuteAsync(@"
                                         UPDATE dr_fields SET
                                             section_id = @sectionId,
@@ -1063,6 +1081,70 @@ namespace WadiAlAin.Infrastructure.Services
                               AND id NOT IN (SELECT DISTINCT section_id FROM dr_fields WHERE section_id IS NOT NULL)",
                             new { removedSectionIds }, trans);
                     }
+                }
+
+                // منح صلاحيات التقرير الجديد تلقائياً للأدوار المخولة في جدول CustomRoles
+                if (isNewReport && reportId > 0)
+                {
+                    try
+                    {
+                        var roles = (await conn.QueryAsync<(int Id, string? Code, string? PermissionsJson)>(
+                            "SELECT id AS Id, code AS Code, permissions_json AS PermissionsJson FROM CustomRoles",
+                            transaction: trans)).ToList();
+
+                        foreach (var role in roles)
+                        {
+                            var perms = new List<string>();
+                            if (!string.IsNullOrWhiteSpace(role.PermissionsJson))
+                            {
+                                try
+                                {
+                                    perms = JsonSerializer.Deserialize<List<string>>(role.PermissionsJson) ?? new List<string>();
+                                }
+                                catch { }
+                            }
+
+                            var codeLower = (role.Code ?? "").Trim().ToLowerInvariant();
+                            bool isAdminOrManager = codeLower == "admin" ||
+                                                    codeLower == "qualitymanager" ||
+                                                    codeLower == "factorymanager" ||
+                                                    codeLower == "generalmanager" ||
+                                                    codeLower == "qualitysupervisor";
+                            bool hasDynamicPerm = perms.Contains("design_dynamic_reports") ||
+                                                  perms.Contains("fill_dynamic_reports") ||
+                                                  perms.Contains("fill_quality_dynamic_reports") ||
+                                                  perms.Contains("fill_food_safety_dynamic_reports") ||
+                                                  perms.Contains("view_reports");
+
+                            if (isAdminOrManager || hasDynamicPerm)
+                            {
+                                string[] newPerms = new[]
+                                {
+                                    $"enabled_dyn_rpt_{reportId}",
+                                    $"view_dyn_rpt_{reportId}",
+                                    $"fill_dyn_rpt_{reportId}",
+                                    $"print_dyn_rpt_{reportId}"
+                                };
+                                bool changed = false;
+                                foreach (var np in newPerms)
+                                {
+                                    if (!perms.Contains(np))
+                                    {
+                                        perms.Add(np);
+                                        changed = true;
+                                    }
+                                }
+                                if (changed)
+                                {
+                                    string updatedJson = JsonSerializer.Serialize(perms);
+                                    await conn.ExecuteAsync(
+                                        "UPDATE CustomRoles SET permissions_json = @PermissionsJson WHERE id = @RoleId",
+                                        new { PermissionsJson = updatedJson, RoleId = role.Id }, trans);
+                                }
+                            }
+                        }
+                    }
+                    catch { }
                 }
 
                 trans.Commit();
