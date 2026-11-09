@@ -206,13 +206,35 @@ namespace WadiAlAin.Infrastructure.Services
                     ?? username;
 
                 var report = await conn.QuerySingleOrDefaultAsync<dynamic>(
-                    "SELECT id, current_version_id FROM dr_reports WHERE id = @ReportId AND is_active = 1",
+                    "SELECT id, current_version_id, doc_number, code FROM dr_reports WHERE id = @ReportId AND is_active = 1",
                     new { ReportId = reportId }, trans);
 
                 if (report == null)
                     return Result<int>.Fail("لم يتم العثور على النموذج الديناميكي أو غير نشط.");
 
                 reportVersionId ??= (int?)report.current_version_id;
+
+                // استخراج السنة من تاريخ إنشاء السجل لتسلسل سنوي مستقل
+                string yearStr = DateTime.UtcNow.Year.ToString();
+                if (!string.IsNullOrWhiteSpace(createdAt) && createdAt.Length >= 4)
+                {
+                    yearStr = createdAt.Substring(0, 4);
+                }
+
+                // تحديد البادئة الرسمية لكود التقرير (doc_number أو code أو كود افتراضي)
+                string repCodeOrDoc = (string?)report.code;
+                if (string.IsNullOrWhiteSpace(repCodeOrDoc))
+                {
+                    repCodeOrDoc = (string?)report.doc_number;
+                }
+                if (string.IsNullOrWhiteSpace(repCodeOrDoc))
+                {
+                    repCodeOrDoc = $"SEL-RPT-{reportId}";
+                }
+                else
+                {
+                    repCodeOrDoc = repCodeOrDoc.Trim();
+                }
 
                 bool existsInDb = recordId > 0 &&
                     (await conn.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM dr_records WHERE id = @recordId", new { recordId }, trans)) > 0;
@@ -256,17 +278,28 @@ namespace WadiAlAin.Infrastructure.Services
                 }
                 else
                 {
+                    // احتساب الرقم التسلسلي المستقل لهذا التقرير داخل نفس السنة بشكل ذري
+                    int nextSerial = await conn.ExecuteScalarAsync<int>(@"
+                        SELECT COALESCE(MAX(record_serial), 0) + 1 
+                        FROM dr_records WITH (UPDLOCK, HOLDLOCK)
+                        WHERE report_id = @reportId AND LEFT(created_at, 4) = @yearStr",
+                        new { reportId, yearStr }, trans);
+
+                    string recordCode = $"{repCodeOrDoc}-{yearStr}-{nextSerial.ToString().PadLeft(4, '0')}";
+
                     recordId = await conn.QuerySingleAsync<int>(@"
                         INSERT INTO dr_records (
                             report_id, branch_id, branch_name, shift_id, shift_name,
                             report_version_id, data_json, title, notes, client_uuid, is_compliant,
+                            record_serial, record_code,
                             created_by, created_at, status, approval_status)
                         VALUES (
                             @reportId, @branchId, @branchName, @shiftId, @shiftName,
                             @reportVersionId, @dataJson, @title, @notes, @clientUuid, @isCompliant,
+                            @nextSerial, @recordCode,
                             @createdBy, @createdAt, @status, @approvalStatus);
                         SELECT CAST(SCOPE_IDENTITY() AS INT);",
-                        new { reportId, branchId, branchName, shiftId, shiftName, reportVersionId, dataJson, title, notes, clientUuid, isCompliant, createdBy = creatorName, createdAt, status, approvalStatus }, trans);
+                        new { reportId, branchId, branchName, shiftId, shiftName, reportVersionId, dataJson, title, notes, clientUuid, isCompliant, nextSerial, recordCode, createdBy = creatorName, createdAt, status, approvalStatus }, trans);
                 }
 
                 if (body.TryGetProperty("values", out var valArr) && valArr.ValueKind == JsonValueKind.Array)
